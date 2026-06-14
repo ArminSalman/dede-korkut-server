@@ -32,31 +32,34 @@ wss.on('connection', (ws) => {
                 }
                 
                 if (rooms[targetRoom]) {
-                    if (!rooms[targetRoom].players.includes(packet.player_name)) {
-                        rooms[targetRoom].players.push(packet.player_name);
+                    // NEW: Check for duplicate name inside the target room
+                    if (rooms[targetRoom].players.includes(packet.player_name)) {
+                        console.log(`[Join Rejected] Name '${packet.player_name}' already exists in room ${targetRoom}`);
+                        ws.send(JSON.stringify({
+                            type: "join_rejected",
+                            reason: "This name is already taken in the Oba!"
+                        }));
+                        return; // Halt execution so they aren't added
                     }
+
+                    // If name is unique, proceed with standard registration
+                    rooms[targetRoom].players.push(packet.player_name);
                     ws.room_name = targetRoom;
                     ws.player_name = packet.player_name;
                     broadcast_room_update(targetRoom);
                 }
             }
 
-            // NEW: Handle host terminating the entire room
             else if (packet.action === "close_room") {
                 if (ws.room_name && rooms[ws.room_name]) {
                     const targetRoom = ws.room_name;
-                    
-                    // Broadcast termination command to everyone in this room
                     const terminatePayload = JSON.stringify({ type: "room_terminated" });
                     wss.clients.forEach((client) => {
                         if (client.room_name === targetRoom && client.readyState === WebSocket.OPEN) {
                             client.send(terminatePayload);
-                            // Reset client room references on the server side
                             client.room_name = null;
                         }
                     });
-                    
-                    // Delete the room from server memory entirely
                     delete rooms[targetRoom];
                     console.log(`[Server Memory] Room ${targetRoom} shut down by host.`);
                 }
