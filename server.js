@@ -3,73 +3,74 @@ const http = require('http');
 const WebSocket = require('ws');
 
 const app = express();
-
-app.get('/', (req, res) => {
-    res.send('Dede Korkut Cloud Server is Active!');
-});
+app.get('/', (req, res) => res.send('Dede Korkut Server Active'));
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Central server memory storage
-let globalLobbyState = {
-    oba_name: "",
-    players: {}
-};
+// Server-side source of truth memory
+let rooms = {}; 
 
 wss.on('connection', (ws) => {
-    console.log('An Alp connected to the cloud server.');
-
     ws.on('message', (message) => {
         try {
-            const data = JSON.parse(message);
-
-            // Handle incoming data synchronization packet
-            if (data.type === "sync_state") {
-                globalLobbyState.oba_name = data.oba_name;
-                globalLobbyState.players = data.players;
-                console.log(`[Server Storage Updated] Oba: ${globalLobbyState.oba_name}, Total Players: ${Object.keys(globalLobbyState.players).length}`);
+            const packet = JSON.parse(message);
+            
+            if (packet.action === "host_room") {
+                rooms[packet.oba_name] = {
+                    oba_name: packet.oba_name,
+                    players: [packet.host_name]
+                };
+                ws.room_name = packet.oba_name;
+                ws.player_name = packet.host_name;
+                broadcast_room_update(packet.oba_name);
+            }
+            
+            else if (packet.action === "join_room") {
+                // If rooms are empty or specific room doesn't exist, fallback to first active room
+                let targetRoom = packet.oba_name;
+                if (!rooms[targetRoom] && Object.keys(rooms).length > 0) {
+                    targetRoom = Object.keys(rooms)[0];
+                }
                 
-                // Broadcast the updated server memory to ALL connected clients
-                broadcast(JSON.stringify({
-                    type: "lobby_update",
-                    oba_name: globalLobbyState.oba_name,
-                    players: globalLobbyState.players
-                }));
-            } 
-            // Handle new client raw request for current server data
-            else if (data.type === "request_initial_data") {
-                ws.send(JSON.stringify({
-                    type: "lobby_update",
-                    oba_name: globalLobbyState.oba_name,
-                    players: globalLobbyState.players
-                }));
-                console.log("[Server Memory] Sent stored lobby information to a newly joined client.");
+                if (rooms[targetRoom]) {
+                    if (!rooms[targetRoom].players.includes(packet.player_name)) {
+                        rooms[targetRoom].players.push(packet.player_name);
+                    }
+                    ws.room_name = targetRoom;
+                    ws.player_name = packet.player_name;
+                    broadcast_room_update(targetRoom);
+                }
             }
         } catch (e) {
-            // Fallback for native engine RPC raw bytes packets
-            wss.clients.forEach((client) => {
-                if (client !== ws && client.readyState === WebSocket.OPEN) {
-                    client.send(message);
-                }
-            });
+            console.error("Non-JSON packet dropped.");
         }
     });
 
     ws.on('close', () => {
-        console.log('An Alp disconnected from the gateway.');
+        if (ws.room_name && rooms[ws.room_name]) {
+            rooms[ws.room_name].players = rooms[ws.room_name].players.filter(p => p !== ws.player_name);
+            if (rooms[ws.room_name].players.length === 0) {
+                delete rooms[ws.room_name];
+            } else {
+                broadcast_room_update(ws.room_name);
+            }
+        }
     });
 });
 
-function broadcast(packet) {
+function broadcast_room_update(roomName) {
+    const updatePayload = JSON.stringify({
+        type: "lobby_update",
+        oba_name: rooms[roomName].oba_name,
+        players: rooms[roomName].players
+    });
+    
     wss.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(packet);
+        if (client.room_name === roomName && client.readyState === WebSocket.OPEN) {
+            client.send(updatePayload);
         }
     });
 }
 
-const PORT = process.env.PORT || 8910;
-server.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-});
+server.listen(process.env.PORT || 8910);
