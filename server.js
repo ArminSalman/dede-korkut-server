@@ -18,7 +18,8 @@ wss.on('connection', (ws) => {
             if (packet.action === "host_room") {
                 rooms[packet.oba_name] = {
                     oba_name: packet.oba_name,
-                    players: [packet.host_name]
+                    players: [packet.host_name],
+                    total_roles: packet.total_roles || 0 // NEW: Store total role configuration count
                 };
                 ws.room_name = packet.oba_name;
                 ws.player_name = packet.host_name;
@@ -32,17 +33,14 @@ wss.on('connection', (ws) => {
                 }
                 
                 if (rooms[targetRoom]) {
-                    // NEW: Check for duplicate name inside the target room
                     if (rooms[targetRoom].players.includes(packet.player_name)) {
-                        console.log(`[Join Rejected] Name '${packet.player_name}' already exists in room ${targetRoom}`);
                         ws.send(JSON.stringify({
                             type: "join_rejected",
                             reason: "This name is already taken in the Oba!"
                         }));
-                        return; // Halt execution so they aren't added
+                        return;
                     }
 
-                    // If name is unique, proceed with standard registration
                     rooms[targetRoom].players.push(packet.player_name);
                     ws.room_name = targetRoom;
                     ws.player_name = packet.player_name;
@@ -86,7 +84,8 @@ function broadcast_room_update(roomName) {
     const updatePayload = JSON.stringify({
         type: "lobby_update",
         oba_name: rooms[roomName].oba_name,
-        players: rooms[roomName].players
+        players: rooms[roomName].players,
+        total_roles: rooms[roomName].total_roles // NEW: Stream total role count back down to all clients
     });
     
     wss.clients.forEach((client) => {
