@@ -8,7 +8,6 @@ app.get('/', (req, res) => res.send('Dede Korkut Server Active'));
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Server-side source of truth memory
 let rooms = {}; 
 
 wss.on('connection', (ws) => {
@@ -27,7 +26,6 @@ wss.on('connection', (ws) => {
             }
             
             else if (packet.action === "join_room") {
-                // If rooms are empty or specific room doesn't exist, fallback to first active room
                 let targetRoom = packet.oba_name;
                 if (!rooms[targetRoom] && Object.keys(rooms).length > 0) {
                     targetRoom = Object.keys(rooms)[0];
@@ -40,6 +38,27 @@ wss.on('connection', (ws) => {
                     ws.room_name = targetRoom;
                     ws.player_name = packet.player_name;
                     broadcast_room_update(targetRoom);
+                }
+            }
+
+            // NEW: Handle host terminating the entire room
+            else if (packet.action === "close_room") {
+                if (ws.room_name && rooms[ws.room_name]) {
+                    const targetRoom = ws.room_name;
+                    
+                    // Broadcast termination command to everyone in this room
+                    const terminatePayload = JSON.stringify({ type: "room_terminated" });
+                    wss.clients.forEach((client) => {
+                        if (client.room_name === targetRoom && client.readyState === WebSocket.OPEN) {
+                            client.send(terminatePayload);
+                            // Reset client room references on the server side
+                            client.room_name = null;
+                        }
+                    });
+                    
+                    // Delete the room from server memory entirely
+                    delete rooms[targetRoom];
+                    console.log(`[Server Memory] Room ${targetRoom} shut down by host.`);
                 }
             }
         } catch (e) {
@@ -60,6 +79,7 @@ wss.on('connection', (ws) => {
 });
 
 function broadcast_room_update(roomName) {
+    if (!rooms[roomName]) return;
     const updatePayload = JSON.stringify({
         type: "lobby_update",
         oba_name: rooms[roomName].oba_name,
